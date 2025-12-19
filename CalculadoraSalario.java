@@ -1,94 +1,85 @@
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
 import java.math.BigDecimal;
-import java.math.RoundingMode;
+import static org.junit.jupiter.api.Assertions.*;
 
-public class CalculadoraSalario {
+class CalculadoraSalarioTest {
 
-    // Constantes atualizadas conforme novas regras
-    private static final BigDecimal TAXA_INSS = new BigDecimal("0.08");
-    private static final BigDecimal TETO_INSS = new BigDecimal("500.00");
-    
-    private static final BigDecimal TAXA_VT = new BigDecimal("0.06");
-    
-    private static final BigDecimal LIMITE_ISENCAO_IR = new BigDecimal("2000.00");
-    private static final BigDecimal LIMITE_FAIXA_1_IR = new BigDecimal("4000.00");
-    private static final BigDecimal TAXA_IR_FAIXA_1 = new BigDecimal("0.10");
-    private static final BigDecimal TAXA_IR_FAIXA_2 = new BigDecimal("0.20");
-    
-    private static final BigDecimal DEDUCAO_POR_DEPENDENTE = new BigDecimal("150.00");
+    CalculadoraSalario calculadora = new CalculadoraSalario();
 
-    public BigDecimal calcularSalarioLiquido(BigDecimal salarioBruto, int numeroDependentes, boolean usaValeTransporte) {
-        // Validações
-        validarEntradas(salarioBruto, numeroDependentes);
+    // ==========================================
+    // TESTES UNITÁRIOS: REGRAS ISOLADAS
+    // ==========================================
 
-        // Cálculos dos descontos
-        BigDecimal descontoINSS = calcularINSS(salarioBruto);
-        BigDecimal descontoVT = calcularValeTransporte(salarioBruto, usaValeTransporte);
-        BigDecimal descontoIRRF = calcularIRRF(salarioBruto, numeroDependentes);
-
-        // Cálculo Final
-        BigDecimal salarioLiquido = salarioBruto
-                .subtract(descontoINSS)
-                .subtract(descontoVT)
-                .subtract(descontoIRRF);
-
-        return arredondar(salarioLiquido);
+    @Test
+    @DisplayName("Regra INSS: Deve respeitar o teto de R$ 500,00")
+    void testeUnitarioINSSComTeto() {
+        // Bruto 10k * 8% = 800 -> Teto 500
+        BigDecimal inss = calculadora.calcularINSS(new BigDecimal("10000.00"));
+        assertEquals(new BigDecimal("500.00"), inss);
     }
 
-    private void validarEntradas(BigDecimal salario, int dependentes) {
-        if (salario == null || salario.compareTo(BigDecimal.ZERO) <= 0) {
-            throw new IllegalArgumentException("O salário bruto deve ser maior que zero.");
-        }
-        if (dependentes < 0) {
-            throw new IllegalArgumentException("O número de dependentes não pode ser negativo.");
-        }
+    @Test
+    @DisplayName("Regra VT: Deve ser zero se funcionário não optar")
+    void testeUnitarioVTSemOpcao() {
+        BigDecimal vt = calculadora.calcularValeTransporte(new BigDecimal("1000.00"), false);
+        assertEquals(BigDecimal.ZERO, vt);
     }
 
-    // Mantido (Regra não mudou, apenas constantes)
-    protected BigDecimal calcularINSS(BigDecimal salarioBruto) {
-        BigDecimal inssCalculado = salarioBruto.multiply(TAXA_INSS);
-
-        if (inssCalculado.compareTo(TETO_INSS) > 0) {
-            return TETO_INSS;
-        }
-        return arredondar(inssCalculado);
+    @Test
+    @DisplayName("Regra IR (Faixas): Deve aplicar 10% para salários entre 2k e 4k")
+    void testeUnitarioFaixa1IR() {
+        // 2500 * 10% = 250.00
+        BigDecimal irBruto = calculadora.calcularImpostoRendaBruto(new BigDecimal("2500.00"));
+        assertEquals(new BigDecimal("250.00"), irBruto);
     }
 
-    // Nova Lógica: Vale Transporte
-    protected BigDecimal calcularValeTransporte(BigDecimal salarioBruto, boolean usaValeTransporte) {
-        if (usaValeTransporte) {
-            return arredondar(salarioBruto.multiply(TAXA_VT));
-        }
-        return BigDecimal.ZERO;
+    @Test
+    @DisplayName("Regra IR (Faixas): Deve aplicar 20% para salários acima de 4k")
+    void testeUnitarioFaixa2IR() {
+        // 5000 * 20% = 1000.00
+        BigDecimal irBruto = calculadora.calcularImpostoRendaBruto(new BigDecimal("5000.00"));
+        assertEquals(new BigDecimal("1000.00"), irBruto);
     }
 
-    // Lógica Atualizada: IRRF Progressivo + Dependentes
-    protected BigDecimal calcularIRRF(BigDecimal salarioBruto, int numeroDependentes) {
-        BigDecimal valorBaseIR = BigDecimal.ZERO;
-
-        // Definição da alíquota baseada nas faixas
-        if (salarioBruto.compareTo(LIMITE_ISENCAO_IR) <= 0) {
-            return BigDecimal.ZERO; // Isento
-        } else if (salarioBruto.compareTo(LIMITE_FAIXA_1_IR) <= 0) {
-            valorBaseIR = salarioBruto.multiply(TAXA_IR_FAIXA_1); // 10%
-        } else {
-            valorBaseIR = salarioBruto.multiply(TAXA_IR_FAIXA_2); // 20%
-        }
-
-        // Cálculo do abatimento por dependentes
-        BigDecimal totalDeducao = DEDUCAO_POR_DEPENDENTE.multiply(new BigDecimal(numeroDependentes));
+    @Test
+    @DisplayName("Regra Dependentes: Imposto não pode ficar negativo")
+    void testeUnitarioDeducaoNegativa() {
+        // Imposto Devido: 100.00 | 1 Filho (150.00 dedução) -> Resultado deve ser 0.00, não -50.00
+        BigDecimal irBruto = new BigDecimal("100.00");
+        BigDecimal irFinal = calculadora.aplicarDeducaoDependentes(irBruto, 1);
         
-        // Aplicação do abatimento
-        BigDecimal irFinal = valorBaseIR.subtract(totalDeducao);
-
-        // O imposto não pode ser negativo
-        if (irFinal.compareTo(BigDecimal.ZERO) < 0) {
-            return BigDecimal.ZERO;
-        }
-
-        return arredondar(irFinal);
+        assertEquals(BigDecimal.ZERO, irFinal);
     }
 
-    private BigDecimal arredondar(BigDecimal valor) {
-        return valor.setScale(2, RoundingMode.HALF_UP);
+    // ==========================================
+    // TESTES DE INTEGRAÇÃO: CÁLCULO FINAL
+    // ==========================================
+
+    @Test
+    @DisplayName("Integração: Cenário Completo (Teto INSS + IR 20% + VT + Dependentes)")
+    void testeIntegracaoCenarioComplexo() {
+        // Cenário:
+        // Salário: 5000.00
+        // 1. INSS (8% de 5000 = 400.00). (Menor que teto 500) -> Desconto: 400.00
+        // 2. VT (Sim = 6% de 5000) -> Desconto: 300.00
+        // 3. IR Bruto (> 4000 = 20% de 5000) -> 1000.00
+        // 4. Dependentes (2 * 150 = 300 dedução) -> IR Liq: 700.00
+        // ---------------------------------------------------
+        // Líquido = 5000 - 400 - 300 - 700 = 3600.00
+        
+        BigDecimal salarioBruto = new BigDecimal("5000.00");
+        BigDecimal salarioLiquidoEsperado = new BigDecimal("3600.00");
+
+        BigDecimal resultado = calculadora.calcularSalarioLiquido(salarioBruto, 2, true);
+
+        assertEquals(salarioLiquidoEsperado, resultado);
+    }
+
+    @Test
+    @DisplayName("Validação: Salário zero deve lançar exceção")
+    void testeValidacaoSalario() {
+        assertThrows(IllegalArgumentException.class, 
+            () -> calculadora.calcularSalarioLiquido(BigDecimal.ZERO, 0, false));
     }
 }
