@@ -1,104 +1,104 @@
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 
-/**
- * Responsável pelo cálculo de salário líquido seguindo regras tributárias estritas.
- * Foco: Precisão Decimal (BigDecimal) e Isolamento de Regras (Métodos Protected).
- */
 public class CalculadoraSalario {
 
-    // --- Constantes de Configuração (Facilita manutenção de alíquotas) ---
-    private static final BigDecimal TAXA_INSS = new BigDecimal("0.08");
-    private static final BigDecimal TETO_INSS = new BigDecimal("500.00");
+    private static final BigDecimal ZERO = BigDecimal.ZERO;
+    private static final int SCALE = 2;
 
-    private static final BigDecimal TAXA_VT = new BigDecimal("0.06");
+    // =====================
+    // Constantes de negócio
+    // =====================
+    private static final BigDecimal INSS_PERCENTUAL = new BigDecimal("0.08");
+    private static final BigDecimal INSS_TETO = new BigDecimal("500.00");
 
-    private static final BigDecimal IR_LIMITE_ISENCAO = new BigDecimal("2000.00");
-    private static final BigDecimal IR_LIMITE_FAIXA_1 = new BigDecimal("4000.00");
-    private static final BigDecimal IR_TAXA_FAIXA_1 = new BigDecimal("0.10");
-    private static final BigDecimal IR_TAXA_FAIXA_2 = new BigDecimal("0.20");
-    private static final BigDecimal IR_DEDUCAO_DEPENDENTE = new BigDecimal("150.00");
+    private static final BigDecimal VT_PERCENTUAL = new BigDecimal("0.06");
 
-    /**
-     * Método principal (Facade) que orquestra o fluxo de cálculo.
-     */
-    public BigDecimal calcularSalarioLiquido(BigDecimal salarioBruto, int dependentes, boolean usaValeTransporte) {
-        validarEntradas(salarioBruto, dependentes);
+    private static final BigDecimal IR_10 = new BigDecimal("0.10");
+    private static final BigDecimal IR_20 = new BigDecimal("0.20");
 
-        BigDecimal descontoINSS = calcularINSS(salarioBruto);
-        BigDecimal descontoVT = calcularValeTransporte(salarioBruto, usaValeTransporte);
-        
-        // O cálculo do IR é composto (Bruto - Deduções), orquestrado aqui ou em método próprio
+    private static final BigDecimal LIMITE_FAIXA_1 = new BigDecimal("2000.00");
+    private static final BigDecimal LIMITE_FAIXA_2 = new BigDecimal("4000.00");
+
+    private static final BigDecimal DEDUCAO_DEPENDENTE = new BigDecimal("150.00");
+
+    // =====================
+    // API pública
+    // =====================
+
+    public BigDecimal calcularSalarioLiquido(BigDecimal salarioBruto, int dependentes, boolean optouVT) {
+        validarSalario(salarioBruto);
+
+        BigDecimal inss = calcularINSS(salarioBruto);
+        BigDecimal vt = calcularValeTransporte(salarioBruto, optouVT);
+        BigDecimal irLiquido = calcularIRComDependentes(salarioBruto, dependentes);
+
+        return salarioBruto
+                .subtract(inss)
+                .subtract(vt)
+                .subtract(irLiquido)
+                .setScale(SCALE, RoundingMode.HALF_UP);
+    }
+
+    public BigDecimal calcularINSS(BigDecimal salarioBruto) {
+        return aplicarTeto(
+                salarioBruto.multiply(INSS_PERCENTUAL),
+                INSS_TETO
+        );
+    }
+
+    public BigDecimal calcularValeTransporte(BigDecimal salarioBruto, boolean optouVT) {
+        return optouVT
+                ? calcularPercentual(salarioBruto, VT_PERCENTUAL)
+                : ZERO;
+    }
+
+    public BigDecimal calcularImpostoRendaBruto(BigDecimal salarioBruto) {
+        return calcularPercentual(salarioBruto, percentualIR(salarioBruto));
+    }
+
+    public BigDecimal aplicarDeducaoDependentes(BigDecimal impostoBruto, int dependentes) {
+        BigDecimal deducao = DEDUCAO_DEPENDENTE.multiply(BigDecimal.valueOf(dependentes));
+        return maxZero(impostoBruto.subtract(deducao));
+    }
+
+    // =====================
+    // Métodos privados (baixo acoplamento e baixa complexidade)
+    // =====================
+
+    private BigDecimal calcularIRComDependentes(BigDecimal salarioBruto, int dependentes) {
         BigDecimal irBruto = calcularImpostoRendaBruto(salarioBruto);
-        BigDecimal descontoIRFinal = aplicarDeducaoDependentes(irBruto, dependentes);
-
-        BigDecimal salarioLiquido = salarioBruto
-                .subtract(descontoINSS)
-                .subtract(descontoVT)
-                .subtract(descontoIRFinal);
-
-        return arredondar(salarioLiquido);
+        return aplicarDeducaoDependentes(irBruto, dependentes);
     }
 
-    private void validarEntradas(BigDecimal salario, int dependentes) {
-        if (salario == null || salario.compareTo(BigDecimal.ZERO) <= 0) {
-            throw new IllegalArgumentException("Erro: O salário bruto deve ser positivo.");
+    private BigDecimal percentualIR(BigDecimal salarioBruto) {
+        if (salarioBruto.compareTo(LIMITE_FAIXA_2) > 0) return IR_20;
+        if (salarioBruto.compareTo(LIMITE_FAIXA_1) > 0) return IR_10;
+        return ZERO;
+    }
+
+    private BigDecimal calcularPercentual(BigDecimal valor, BigDecimal percentual) {
+        return valor
+                .multiply(percentual)
+                .setScale(SCALE, RoundingMode.HALF_UP);
+    }
+
+    private BigDecimal aplicarTeto(BigDecimal valor, BigDecimal teto) {
+        return min(valor, teto).setScale(SCALE, RoundingMode.HALF_UP);
+    }
+
+    private BigDecimal validarSalario(BigDecimal salario) {
+        if (salario.compareTo(ZERO) <= 0) {
+            throw new IllegalArgumentException("Salário inválido");
         }
-        if (dependentes < 0) {
-            throw new IllegalArgumentException("Erro: O número de dependentes não pode ser negativo.");
-        }
+        return salario;
     }
 
-    // --- Regras de Negócio Isoladas (Protected para Testabilidade) ---
-
-    protected BigDecimal calcularINSS(BigDecimal salarioBruto) {
-        BigDecimal calculado = salarioBruto.multiply(TAXA_INSS);
-        
-        if (calculado.compareTo(TETO_INSS) > 0) {
-            return TETO_INSS;
-        }
-        return arredondar(calculado);
+    private BigDecimal min(BigDecimal a, BigDecimal b) {
+        return a.compareTo(b) < 0 ? a : b;
     }
 
-    protected BigDecimal calcularValeTransporte(BigDecimal salarioBruto, boolean optouPorVT) {
-        if (!optouPorVT) {
-            return BigDecimal.ZERO;
-        }
-        return arredondar(salarioBruto.multiply(TAXA_VT));
-    }
-
-    /**
-     * Calcula apenas a taxa base do IR antes das deduções.
-     * Isso permite testar as faixas (10% vs 20%) isoladamente.
-     */
-    protected BigDecimal calcularImpostoRendaBruto(BigDecimal salarioBruto) {
-        if (salarioBruto.compareTo(IR_LIMITE_ISENCAO) <= 0) {
-            return BigDecimal.ZERO;
-        } 
-        
-        if (salarioBruto.compareTo(IR_LIMITE_FAIXA_1) <= 0) {
-            return arredondar(salarioBruto.multiply(IR_TAXA_FAIXA_1));
-        } 
-        
-        return arredondar(salarioBruto.multiply(IR_TAXA_FAIXA_2));
-    }
-
-    /**
-     * Aplica a dedução de dependentes sobre o imposto bruto.
-     * Garante que o imposto nunca fique negativo.
-     */
-    protected BigDecimal aplicarDeducaoDependentes(BigDecimal irBruto, int dependentes) {
-        BigDecimal totalDeducao = IR_DEDUCAO_DEPENDENTE.multiply(new BigDecimal(dependentes));
-        BigDecimal irLiquido = irBruto.subtract(totalDeducao);
-
-        if (irLiquido.compareTo(BigDecimal.ZERO) < 0) {
-            return BigDecimal.ZERO;
-        }
-        return irLiquido;
-    }
-
-    // Centraliza a regra de arredondamento para garantir consistência no sistema todo
-    private BigDecimal arredondar(BigDecimal valor) {
-        return valor.setScale(2, RoundingMode.HALF_UP);
+    private BigDecimal maxZero(BigDecimal valor) {
+        return valor.compareTo(ZERO) < 0 ? ZERO : valor.setScale(SCALE, RoundingMode.HALF_UP);
     }
 }
